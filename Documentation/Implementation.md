@@ -2,11 +2,13 @@
 
 ## 1. Introduction
 
-This document describes the implementation of an AWS infrastructure project using Amazon VPC, EC2, Application Load Balancer, EC2 Auto Scaling, Amazon RDS for MySQL, Amazon CloudFront, and Amazon CloudWatch.
+This document describes the implementation of an AWS infrastructure project using Amazon VPC, EC2, Application Load Balancer (ALB), EC2 Auto Scaling, Amazon RDS for MySQL, Amazon S3, AWS IAM, Amazon CloudFront, and Amazon CloudWatch.
 
-The goal is to deploy a web server environment with load balancing, scaling, managed database services, content delivery, monitoring, and backup capabilities.
+The goal is to deploy a secure and scalable web infrastructure with load balancing, automatic scaling, managed database services, object storage, identity and access management, content delivery, monitoring, and backup capabilities.
 
-This document should be updated with the actual resource names, configurations, screenshots, and test results from the AWS environment.
+The project demonstrates how AWS services can be integrated to provide secure storage, controlled access, application hosting, database connectivity, and infrastructure monitoring.
+
+The document should be updated with actual resource names, configurations, screenshots, and test results from the AWS environment. A feature should be marked complete only after its implementation has been verified.
 
 ## 2. Prerequisites
 
@@ -18,9 +20,13 @@ The following are required:
 * Basic understanding of networking and security groups.
 * An Ubuntu EC2 instance for the web server.
 * An RDS MySQL database.
+* An S3 bucket for application files and documents.
+* An IAM role for EC2-to-S3 access.
 * A GitHub repository for documentation and evidence.
 
-Before beginning, review the pricing of the AWS resources you intend to use.
+Before beginning, review AWS pricing for the services you intend to use.
+
+Avoid leaving unused EC2 instances, RDS databases, load balancers, NAT Gateways, or other billable resources running after testing.
 
 ## 3. Network Configuration
 
@@ -36,28 +42,33 @@ Create a VPC environment in which web-facing resources and database resources ca
 4. Identify the public and private subnets.
 5. Review the subnet route tables.
 6. Verify that the required internet access and routing are configured.
-7. Review the network ACLs if connectivity problems occur.
+7. Review network ACLs if connectivity problems occur.
 
-The web-facing components must have the network access required for their intended role. The database should remain private and should not be made publicly accessible merely to resolve connectivity problems.
+Web-facing components must have the network access required for their intended role. The database should remain private and should not be made publicly accessible merely to resolve connectivity problems.
+
+The S3 bucket does not need to reside inside your VPC. Amazon S3 is a regional service. An EC2 instance can access it using its IAM role and the appropriate network connectivity.
+
+For private networking, an S3 VPC endpoint can be considered as an additional enhancement. It is not required for the initial implementation.
 
 ### Security Group Considerations
 
 Configure security groups according to the traffic flow:
 
-* CloudFront to the origin: permit the origin traffic required by the chosen design.
-* Load balancer to EC2: permit the web traffic received from the load balancer security group.
-* EC2 administration: restrict SSH access to trusted IP addresses.
+* Load balancer to EC2: permit the required web traffic from the load balancer security group.
+* EC2 administration: restrict SSH access to trusted IP addresses or use an appropriate managed access method.
 * EC2 to RDS: permit MySQL traffic on TCP port 3306 from the EC2 security group.
 * RDS inbound traffic: do not allow unrestricted access from the public internet.
+* EC2 to S3: ensure that the instance has appropriate network connectivity to the S3 regional endpoint.
+
+IAM permissions and security groups serve different purposes. Security groups control network traffic; IAM policies control access to AWS resources and API operations.
 
 ### Evidence to Collect
-
-Save screenshots showing:
 
 * VPC details.
 * Public and private subnet details.
 * Route tables.
 * EC2 and RDS security group rules.
+* S3 VPC endpoint configuration, if implemented.
 
 Recommended folder: `screenshots/networking/`
 
@@ -70,38 +81,33 @@ Deploy a Linux web server that can receive requests from the Application Load Ba
 ### Implementation Steps
 
 1. Open the Amazon EC2 console.
-
 2. Launch an Ubuntu EC2 instance or use the existing project instance.
-
 3. Select the correct VPC and subnet.
-
 4. Attach the intended EC2 security group.
-
 5. Connect to the instance using an authorized method.
-
 6. Update the package index:
 
-   ```bash
-   sudo apt update
-   ```
+```bash
+sudo apt update
+```
 
 7. Install Apache if it is not already installed:
 
-   ```bash
-   sudo apt install apache2 -y
-   ```
+```bash
+sudo apt install apache2 -y
+```
 
 8. Start Apache and configure it to start automatically:
 
-   ```bash
-   sudo systemctl enable --now apache2
-   ```
+```bash
+sudo systemctl enable --now apache2
+```
 
 9. Verify the service:
 
-   ```bash
-   sudo systemctl status apache2
-   ```
+```bash
+sudo systemctl status apache2
+```
 
 10. Check the local web server response:
 
@@ -127,7 +133,7 @@ Recommended folder: `screenshots/ec2-apache/`
 
 ### Objective
 
-Distribute incoming web traffic across the registered EC2 targets.
+Distribute incoming web traffic across registered EC2 targets.
 
 ### Implementation Steps
 
@@ -176,7 +182,9 @@ Configure EC2 Auto Scaling to maintain the desired instance capacity and adjust 
 10. Review the associated CloudWatch alarms and scaling activities.
 11. Verify that newly launched instances register with the target group and pass health checks.
 
-A target of 50% CPU utilization is a scaling target, not a guarantee that a new instance launches immediately whenever CPU exceeds 50%. Scaling behavior depends on metrics, alarm evaluation, cooldown or warm-up behavior, and capacity limits.
+A target of 50% CPU utilization is a scaling target, not a guarantee that a new instance launches immediately whenever CPU exceeds 50%. Scaling behavior depends on metrics, alarm evaluation, instance warm-up, and capacity limits.
+
+If the EC2 application requires S3 access, ensure that instances launched through the Auto Scaling group receive the correct IAM instance profile. Configure this in the launch template so that newly launched instances inherit the required role.
 
 ### Evidence to Collect
 
@@ -187,6 +195,7 @@ A target of 50% CPU utilization is a scaling target, not a guarantee that a new 
 * CloudWatch alarm details.
 * Scaling activity history.
 * Newly launched instance and its target health, if scaling is successfully tested.
+* IAM instance profile configuration in the launch template.
 
 Recommended folder: `screenshots/auto-scaling/`
 
@@ -194,24 +203,33 @@ Recommended folder: `screenshots/auto-scaling/`
 
 ### Objective
 
-Deploy a managed MySQL database and allow authorized application or administration traffic from the EC2 environment.
+Deploy a managed MySQL database and allow authorized application traffic from the EC2 environment.
 
 ### Implementation Steps
 
 1. Open the Amazon RDS console.
+
 2. Create an RDS MySQL database or identify the existing project database.
+
 3. Record the database identifier and endpoint.
+
 4. Confirm that the database is in the intended VPC.
+
 5. Review the DB subnet group and network placement.
+
 6. Confirm that the database status is `Available`.
+
 7. Identify the security group attached to the RDS instance.
+
 8. Add an inbound security group rule for MySQL:
 
    * Type: MySQL/Aurora
    * Protocol: TCP
    * Port: 3306
    * Source: the EC2 instance's security group
+
 9. Keep public accessibility disabled unless a separate, justified requirement dictates otherwise.
+
 10. Store the database username and password securely.
 
 The EC2 and RDS instances being in the same VPC does not automatically guarantee connectivity. Security groups, routing, network ACLs, and database status must also permit the connection.
@@ -239,24 +257,24 @@ Verify network connectivity and establish a MySQL session from the EC2 instance.
 On the EC2 instance, run:
 
 ```bash
-getent hosts db-ecw.czy6ck0g6em5.ap-southeast-2.rds.amazonaws.com
+getent hosts YOUR_RDS_ENDPOINT
 ```
 
-The endpoint should resolve to an address reachable from the EC2 network.
+Replace `YOUR_RDS_ENDPOINT` with the actual RDS endpoint.
 
 #### Step 2: Test TCP Connectivity
 
 Run:
 
 ```bash
-nc -vz -w 5 db-ecw.czy6ck0g6em5.ap-southeast-2.rds.amazonaws.com 3306
+nc -vz -w 5 YOUR_RDS_ENDPOINT 3306
 ```
 
-If the connection times out, investigate the security group attached to RDS first. Confirm that its inbound rule allows TCP port 3306 from the EC2 security group.
+If the connection times out, investigate the RDS security group first. Confirm that its inbound rule allows TCP port 3306 from the correct EC2 security group.
 
-Also check the EC2 outbound rules and, if necessary, the subnet route tables and network ACLs.
+Also check EC2 outbound rules and, if necessary, subnet routing and network ACLs.
 
-Do not treat a timeout as a password problem. Password and authentication issues can be investigated after the network connection succeeds.
+Do not treat a timeout as a password problem. Authentication should be investigated after network connectivity succeeds.
 
 #### Step 3: Install a MySQL Client if Needed
 
@@ -274,7 +292,7 @@ If the package is unavailable under that name in the selected Ubuntu release, ch
 Use the actual RDS endpoint and an authorized database account:
 
 ```bash
-mysql -h db-ecw.czy6ck0g6em5.ap-southeast-2.rds.amazonaws.com -P 3306 -u admin -p
+mysql -h YOUR_RDS_ENDPOINT -P 3306 -u admin -p
 ```
 
 Enter the database password when prompted. Do not put the password directly in the command or commit it to GitHub.
@@ -287,6 +305,7 @@ After a successful connection, run:
 
 ```sql
 SELECT VERSION();
+
 SHOW DATABASES;
 ```
 
@@ -294,58 +313,188 @@ If you have permission to create a test database, you can also run:
 
 ```sql
 CREATE DATABASE employee_db;
+
 SHOW DATABASES;
 ```
 
-Only create resources that are appropriate for your database and permissions. Clean up the test database if it is no longer needed.
+Only create resources that are appropriate for your database and permissions. Clean up test databases if they are no longer needed.
 
-### Evidence to Collect
 
-* Successful TCP connectivity test.
-* Successful MySQL connection.
-* SQL query output.
-* Relevant error output if a test fails, with sensitive information removed.
-
-Recommended folder: `screenshots/database-connection/`
-
-**Implementation status:** Do not mark this section complete until the TCP connection and MySQL session have been successfully verified.
-
-## 9. Amazon CloudFront
+## 9. Amazon S3 — Object Storage
 
 ### Objective
 
-Configure CloudFront to deliver web content through a content delivery network, using the Application Load Balancer as the origin.
+Create a secure S3 bucket to store project files, images, screenshots, documents, or application assets.
+
+For the current project, the bucket can contain the resume PDF and two screenshots already selected for upload. These files demonstrate object storage and can be used to test the EC2 instance's access permissions.
+
+If the project later includes a functioning employee application, the bucket can also store sample employee images or other static assets.
+
+### Implementation Steps
+
+#### Step 1: Create an S3 Bucket
+
+1. Open the Amazon S3 console.
+2. Click **Create bucket**.
+3. Enter a globally unique bucket name.
+4. Select an appropriate AWS Region, preferably the same Region as the EC2 instance.
+5. Keep Block Public Access enabled.
+6. Enable bucket versioning.
+7. Leave other settings at their defaults unless the project requires changes.
+8. Create the bucket.
+
+Record the bucket name and Region in the project documentation.
+
+#### Step 2: Upload Project Files
+
+1. Open the newly created bucket.
+2. Click **Upload**.
+3. Select the resume PDF and two screenshots.
+4. Upload the files.
+5. Verify that all three objects appear in the bucket.
+
+The object names can be chosen freely. Meaningful filenames make the project easier to document.
+
+Do not upload confidential information, passwords, AWS access keys, or other sensitive files. Keep the bucket private because the resume contains personal information.
+
+#### Step 3: Configure Bucket Security
+
+Open the bucket's Permissions tab.
+
+Verify that:
+
+* Block Public Access is enabled.
+* No public bucket policy has been configured.
+* Access is granted only to the intended AWS identities.
+* Versioning is enabled.
+
+Avoid adding public-read ACLs or policies.
+
+#### Step 4: Understand S3 Object Permissions
+
+An S3 bucket contains objects identified by their object keys. IAM permissions determine which operations an identity can perform.
+
+Examples include:
+
+* `s3:ListBucket` — list objects in the bucket.
+* `s3:GetObject` — retrieve objects.
+* `s3:PutObject` — upload objects.
+
+These permissions should be granted only when needed.
+
+
+## 10. AWS IAM — Secure EC2-to-S3 Access
+
+### Objective
+
+Create an IAM role that allows the EC2 instance to access only the intended S3 bucket.
+
+This demonstrates the principle of least privilege and the use of temporary credentials provided through an EC2 instance profile.
+
+### Implementation Steps
+
+#### Step 1: Create a Custom IAM Policy
+
+1. Open IAM.
+2. Select **Policies → Create policy → JSON**.
+3. Enter the following policy, replacing `YOUR_BUCKET_NAME` with the actual S3 bucket name.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ListProjectBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket"
+      ],
+      "Resource": "arn:aws:s3:::YOUR_BUCKET_NAME"
+    },
+    {
+      "Sid": "ReadAndUploadProjectObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::YOUR_BUCKET_NAME/*"
+    }
+  ]
+}
+```
+
+4. Name the policy `EC2S3ProjectAccessPolicy`.
+5. Create the policy.
+
+This policy permits listing the bucket, reading objects, and uploading objects. It does not grant permission to delete objects.
+
+The policy is intentionally scoped to one bucket. If the project only requires read access, remove `s3:PutObject`. If it only requires uploads, remove `s3:GetObject`.
+
+#### Step 2: Create the IAM Role
+
+1. In IAM, select **Roles → Create role**.
+2. Select **AWS service** as the trusted entity type.
+3. Choose **EC2** as the service or use case.
+4. Attach `EC2S3ProjectAccessPolicy`.
+5. Name the role `EC2S3ProjectRole`.
+6. Review the configuration and create the role.
+
+The EC2 trust relationship allows the EC2 service to assume the role.
+
+#### Step 3: Attach the Role to EC2
+
+1. Open the EC2 console.
+2. Select the application instance.
+3. Choose **Actions → Security → Modify IAM role**.
+4. Select `EC2S3ProjectRole`.
+5. Update the IAM role.
+
+If the application uses an Auto Scaling group, also configure the IAM instance profile in the launch template. Otherwise, newly launched instances may not receive the intended permissions.
+
+#### Step 4: Verify IAM Role Attachment
+
+Return to the EC2 instance details and confirm that the correct IAM role is attached.
+
+Do not create permanent AWS access keys for the instance. The instance profile provides credentials automatically when the role is configured correctly.
+
+### Evidence to Collect
+
+* Custom IAM policy JSON.
+* IAM role details.
+* Role trust relationship showing EC2.
+* EC2 instance details showing the attached role.
+* Launch template instance profile configuration, if applicable.
+
+Recommended folder: `screenshots/iam/`
+
+## 11. Amazon CloudFront
+
+### Objective
+
+Configure CloudFront to deliver web content through a content delivery network, using the Application Load Balancer as the existing application origin.
 
 ### Implementation Steps
 
 1. Open the Amazon CloudFront console.
-2. Create a distribution.
-3. Configure the Application Load Balancer as the origin.
+2. Create or inspect the existing distribution.
+3. Configure the Application Load Balancer as the application origin.
 4. Select the correct origin protocol policy.
 5. Configure the viewer protocol policy, such as redirecting HTTP requests to HTTPS.
 6. Review the cache policy.
 7. Use suitable caching behavior for the website's content.
 8. Avoid aggressive caching for dynamic content unless it has been designed and tested for caching.
-9. Create the distribution.
+9. Create or update the distribution.
 10. Wait until the distribution status indicates it is deployed.
 11. Test the website using the CloudFront distribution domain.
-12. Verify that the response is correct and that the origin is reachable.
+12. Verify that the response is correct and the origin is reachable.
 
-For an origin that uses HTTPS, the load balancer must have a suitable certificate and HTTPS listener. Do not configure HTTPS to the origin without verifying the origin-side TLS setup.
+For an HTTPS origin, the load balancer must have a suitable certificate and HTTPS listener.
 
 CloudFront does not replace the load balancer or repair unhealthy EC2 targets. Confirm that the origin works before troubleshooting CloudFront.
 
-### Evidence to Collect
 
-* CloudFront distribution details.
-* Origin configuration showing the load balancer.
-* Cache and viewer protocol policies.
-* Distribution status showing deployed.
-* Successful website response through the CloudFront domain.
-
-Recommended folder: `screenshots/cloudfront/`
-
-## 10. Amazon CloudWatch Monitoring
+## 12. Amazon CloudWatch Monitoring
 
 ### Objective
 
@@ -355,27 +504,16 @@ Monitor infrastructure performance and observe events that affect scaling and av
 
 1. Open the CloudWatch console.
 2. Review EC2 CPU utilization.
-3. Review the load balancer metrics.
+3. Review load balancer metrics.
 4. Review target group health-related metrics.
 5. Review RDS metrics such as CPU utilization and database connections.
 6. Inspect the alarms associated with Auto Scaling.
 7. Configure additional alarms if required.
 8. Record the alarm thresholds and evaluation settings.
-9. If testing scaling, observe the metric and the resulting Auto Scaling activity.
+9. If testing scaling, observe the metric and resulting Auto Scaling activity.
 
-CloudWatch metrics and alarms can help identify performance problems, unhealthy targets, and scaling events. They do not guarantee that an issue is automatically resolved.
 
-### Evidence to Collect
-
-* EC2 CPU utilization graph.
-* Load balancer metrics.
-* RDS metrics.
-* Scaling-related alarms.
-* Auto Scaling activity history, if applicable.
-
-Recommended folder: `screenshots/cloudwatch/`
-
-## 11. RDS Backups and Snapshots
+## 13. RDS Backups and Snapshots
 
 ### Objective
 
@@ -387,80 +525,75 @@ Understand how database backups support recovery.
 2. Select the database.
 3. Review its automated backup retention settings.
 4. Record the backup window and retention period.
-5. Review the available automated backups.
+5. Review available automated backups.
 6. If required, create a manual DB snapshot.
 7. Record the snapshot identifier and status.
 8. Understand the process for restoring a snapshot to a new database instance.
 
-Automated backups and manual snapshots serve related but different purposes. A manual snapshot remains available until it is deleted, while automated backup retention follows the configured retention period and AWS behavior.
 
-Creating a snapshot alone does not prove that database recovery works. A restore test provides stronger evidence, but it can create additional costs.
-
-### Evidence to Collect
-
-* Automated backup configuration.
-* Backup retention period.
-* Snapshot details and status.
-* Restore test evidence, if a restore test is performed.
-
-Recommended folder: `screenshots/backups/`
-
-## 12. Final Validation
+## 14. Final Validation
 
 Before considering the project complete, verify the following:
+
+### Networking and Web Hosting
 
 * [ ] VPC and subnet configuration is documented.
 * [ ] Apache is active on the EC2 instance.
 * [ ] The load balancer has healthy targets.
 * [ ] The website is accessible through the load balancer.
+
+### Auto Scaling
+
 * [ ] Auto Scaling settings are documented.
 * [ ] The scaling policy and associated alarms are verified.
-* [ ] RDS is available and remains appropriately private.
+* [ ] Newly launched instances receive the intended IAM instance profile, if applicable.
+
+### Database
+
+* [ ] RDS is available and appropriately private.
 * [ ] EC2-to-RDS TCP connectivity succeeds.
 * [ ] MySQL login and SQL queries succeed.
+
+### S3 and IAM
+
+* [ ] The S3 bucket has been created.
+* [ ] Project files have been uploaded.
+* [ ] Block Public Access is enabled.
+* [ ] Bucket versioning is enabled.
+* [ ] The custom IAM policy is scoped to the intended bucket.
+* [ ] The EC2 IAM role has the correct trust relationship.
+* [ ] The role is attached to the EC2 instance.
+* [ ] The AWS CLI identifies the assumed role.
+* [ ] Bucket listing succeeds.
+* [ ] Object download succeeds when permitted.
+* [ ] An unauthorized operation is denied.
+* [ ] No permanent AWS access keys are stored on the EC2 instance.
+
+### CloudFront
+
 * [ ] CloudFront distribution is deployed.
 * [ ] The website is accessible through CloudFront.
+* [ ] The S3 origin and OAC are verified if the optional enhancement is implemented.
+
+### Monitoring and Backups
+
 * [ ] CloudWatch metrics and alarms are documented.
 * [ ] RDS backup settings are verified.
+* [ ] Snapshot or restore evidence is included if implemented.
+
+### Documentation
+
 * [ ] Required screenshots are organized in GitHub.
-* [ ] No passwords, access keys, or private keys are committed.
+* [ ] Implementation status reflects the actual test results.
+* [ ] No passwords, access keys, private keys, or confidential logs are committed.
 
-## 13. Troubleshooting and Lessons Learned
 
-Record each issue using the following format:
+## 15. Conclusion
 
-### Issue
+This project demonstrates practical experience with AWS networking, Linux web server administration, load balancing, Auto Scaling, managed databases, object storage, identity and access management, content delivery, monitoring, backups, and troubleshooting.
 
-Describe the observed problem.
+The S3 and IAM implementation demonstrates secure object storage and role-based access for an EC2 workload without requiring permanent access keys on the instance.
 
-### Symptoms
-
-Record the error message or unexpected behavior.
-
-### Investigation
-
-List the checks and commands performed.
-
-### Root Cause
-
-Document the cause only after it has been confirmed.
-
-### Resolution
-
-Record the configuration change or command that resolved the issue.
-
-### Verification
-
-Record the test that demonstrated the issue was resolved.
-
-### Evidence
-
-Include a screenshot or sanitized command output.
-
-For example, if the EC2-to-RDS connection times out, record the TCP test, inspect the RDS security group, and verify that the inbound rule references the correct EC2 security group. Update the root cause and resolution only after connectivity has been restored and tested.
-
-## 14. Conclusion
-
-This implementation demonstrates practical experience with AWS networking, Linux web server administration, load balancing, Auto Scaling, managed databases, content delivery, monitoring, backups, and troubleshooting.
+The optional CloudFront S3 origin demonstrates how static content can be delivered while keeping the storage bucket private.
 
 The final project report should distinguish between resources that were configured, features that were tested successfully, and features that remain incomplete.
